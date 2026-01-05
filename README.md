@@ -1,0 +1,2 @@
+# LawSyn
+Legal augumentation
