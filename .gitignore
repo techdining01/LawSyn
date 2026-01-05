@@ -7,7 +7,7 @@ __pycache__/
 *.so
 
 .env
-law
+lawsyn
 # Distribution / packaging
 .Python
 build/
