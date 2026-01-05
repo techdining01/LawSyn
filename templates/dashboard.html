@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-5">
+        <div>
+            <h2 class="fw-bold text-navy">National Jurisdiction Hub</h2>
+            <p class="text-muted">Real-time monitoring across 15 Nigerian High Courts</p>
+        </div>
+        <div class="text-end">
+            <span class="badge bg-success p-2">System Active</span>
+            <p class="small text-muted mt-1">Refreshed: Jan 5, 2026</p>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        {% for state_id, info in states_data.items() %}
+        <div class="col-md-4 col-lg-3">
+            <div class="card h-100 shadow-sm border-0" style="border-top: 4px solid #c5a059 !important;">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <h5 class="fw-bold text-navy mb-0">{{ info.name }}</h5>
+                        <span class="badge bg-light text-dark border">{{ info.timeline }}</span>
+                    </div>
+                    <p class="mb-1 small"><strong>Limit:</strong> {{ info.limit }}</p>
+                    <p style="font-size: 0.85rem;" class="text-muted mb-3">{{ info.rules }}</p>
+                    
+                    <div class="d-grid gap-2">
+                        <a href="/generate-cert/{{ state_id }}/MOCK-123" class="btn btn-sm btn-navy text-white rounded-pill">
+                            <i class="bi bi-file-earmark-pdf"></i> Section 84 Cert
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<style>
+    .btn-navy { background-color: #0a192f; }
+    .btn-navy:hover { background-color: #1a2a44; color: #c5a059; }
+</style>
+{% endblock %}
