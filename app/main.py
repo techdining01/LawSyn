@@ -1,101 +1,90 @@
 import json
-from fastapi import FastAPI, Request
+from datetime import datetime
+from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from .worker import morning_sync_task
+
+# Business Logic Imports
 from app.core.jurisdiction import JURISDICTION_DATA
-from fastapi.responses import Response
-from app.pdf_generator import create_pdf_certificate
-from app.services.scraper import scrape_lagos_case
-from app.ai_agent import extract_case_details
+from app.database import SessionLocal, Case
+from app.services.scraper_factory import ScraperFactory
+from app.ai_agent import parse_court_data
+from app.worker import morning_judicial_sync  
 
-
-
-app = FastAPI()
+app = FastAPI(title="LawSync National Hub")
 templates = Jinja2Templates(directory="templates")
-
-# 1. Mount static files (for CSS/JS)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# --- DASHBOARD & VIEWS ---
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
+    """The National Hub showing the Big 15 states."""
     return templates.TemplateResponse("dashboard.html", {
         "request": request, 
-        "states_data": JURISDICTION_DATA # All the deep detail is now here
+        "states_data": JURISDICTION_DATA
     })
 
-@app.post("/test-sync")
-async def test_sync(state: str, suit_no: str, email: str):
-    # This triggers the worker we just fixed!
-    morning_sync_task.delay(state, suit_no, email)
-    return {"message": "Invasive Sync Started"}
 
-
-# THE NEW DYNAMIC ROUTE
 @app.get("/state/{state_id}", response_class=HTMLResponse)
 async def state_detail(request: Request, state_id: str):
-    # Fetch the specific logic for the chosen state
+    """Deep dive into a specific state's rules and limits."""
     data = JURISDICTION_DATA.get(state_id.lower())
-    
+    if not data:
+        raise HTTPException(status_code=404, detail="State not integrated.")
     return templates.TemplateResponse("state_view.html", {
         "request": request,
         "state": data
     })
 
 
-@app.get("/generate-cert/{state_id}/{case_id}")
-async def generate_certificate(request: Request, state_id: str, case_id: str):
-    # Get state name from our Big 15 list
-    state_info = JURISDICTION_DATA.get(state_id.lower())
-    
-    # This is the legal "Boilerplate" required by the Evidence Act
-    certificate_content = {
-        "case_id": case_id,
-        "state": state_info['name'],
-        "device": "LawSync Cloud Server (Ubuntu/Python Engine)",
-        "declaration": f"The electronic record of Case {case_id} was produced by the LawSync system during a period over which the computer was used regularly to store or process information for the purposes of legal record keeping."
-    }
-    
-    return templates.TemplateResponse("certificate.html", {
-        "request": request,
-        "cert": certificate_content
-    })
+@app.post("/sync-case")
+async def sync_case(request: Request, suit_no: str = Form(...), state: str = Form(...)):
+    """
+    THE PRIMARY ENGINE: 
+    1. Scrapes Live Data
+    2. Parses with AI
+    3. Saves to DB
+    4. Renders Section 84 Cert
+    """
+    db = SessionLocal()
+    try:
+        # 1. LIVE SCRAPE (Factory decides if it's Lagos, Abuja, or Oyo)
+        raw_text = ScraperFactory.get_data(state, suit_no)
 
+        # 2. AI PARSING (Gemini 2.0 Flash)
+        case_info = parse_court_data(raw_text)
 
-@app.post("/force-sync/{state_id}")
-async def force_sync(state_id: str):
-    # 1. We trigger the Celery task in the background
-    # .delay() means "Don't wait for it to finish, just start it"
-    task = morning_sync_task.delay(state_id) 
+        # 3. DATABASE PERSISTENCE
+        new_case = Case(
+            suit_no=suit_no,
+            state=state,
+            claimant=case_info.get('claimant', 'N/A'),
+            defendant=case_info.get('defendant', 'N/A'),
+            last_status=case_info.get('status', 'Active'),
+            updated_at=datetime.utcnow()
+        )
+        db.merge(new_case) # Update if exists, Create if not
+        db.commit()
+
+        # 4. RENDER SECTION 84 CERTIFICATE
+        cert_payload = {
+            "state": state.upper(),
+            "case_id": suit_no,
+            "claimant": case_info.get('claimant'),
+            "defendant": case_info.get('defendant'),
+            "device": "LAWSYNC-PRO-NODE-01",
+            "date": datetime.now().strftime("%B %d, %Y"),
+            "declaration": f"Case record verified via {state.title()} Judicial Portal."
+        }
+        return templates.TemplateResponse("certificate.html", {"cert": cert_payload})
     
-    # 2. Redirect the user back to the dashboard with a success message
-    return {"message": f"Sync started in background for {state_id}. Task ID: {task.id}"}
+    finally:
+        db.close()
 
-
-
-
-@app.get("/generate-cert/lagos/{suit_no}")
-async def download_lagos_cert(suit_no: str):
-    # 1. Real-time Scrape
-    raw_data = scrape_lagos_case(suit_no)
-    
-    # 2. AI Extraction
-    structured_json = extract_case_details(raw_data)
-    case_info = json.loads(structured_json)
-    
-    # 3. Build the Certificate Object for your Professional Layout
-    cert_data = {
-        "state": "Lagos State",
-        "case_id": suit_no,
-        "division": "COMMERCIAL",
-        "claimant": case_info['claimant'],
-        "defendant": case_info['defendant'],
-        "device": "LawSync Verified Node-01",
-        "lawyer_name": "Counsel In Charge",
-        "date": "05/01/2026", # Today's date
-        "declaration": f"The case was identified as a {case_info['last_event']} event."
-    }
-    
-    return templates.TemplateResponse("certificate.html", {"cert": cert_data})
+@app.post("/trigger-global-sync")
+async def trigger_global_sync():
+    """Triggers the background worker to scan all cases in the DB."""
+    morning_judicial_sync.delay()
+    return {"message": "Background Morning Watch has been initiated."}
